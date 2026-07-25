@@ -72,7 +72,7 @@ function formatRate(value) {
 function etaText(estimate) {
   switch (estimate?.kind) {
     case "estimated":
-      return `预计 ${formatDuration(estimate.remainingMs)}`;
+      return `预计${formatDuration(estimate.remainingMs)}后耗尽`;
     case "safe-through-reset":
       return "本周期预计不会耗尽";
     case "no-consumption":
@@ -551,20 +551,24 @@ export class QuotaTitlebarUi {
           ? formatClock(quotaWindow.resetsAt, this.state.config.absoluteTime)
           : "未知",
       ),
-      metric("近期速度", formatRate(estimate?.recentRatePercentPerHour)),
-      metric("周期速度", formatRate(estimate?.cycleRatePercentPerHour)),
-      metric("预计耗尽", etaText(estimate), "icr-metric-wide"),
       metric(
-        "ETA 可信度",
-        estimate?.confidence === "high"
-          ? "高"
-          : estimate?.confidence === "medium"
-            ? "中"
-            : estimate?.confidence === "low"
-              ? "低"
-              : "无",
+        "周期起点",
+        estimate?.cycleStartedAt
+          ? formatClock(
+              estimate.cycleStartedAt,
+              this.state.config.absoluteTime,
+            )
+          : "未知",
       ),
-      metric("历史样本", String(estimate?.sampleCount ?? 0)),
+      metric("周期均速", formatRate(estimate?.cycleRatePercentPerHour)),
+      metric(
+        "周期进度",
+        Number.isFinite(estimate?.elapsedPercent)
+          ? formatPercent(estimate.elapsedPercent)
+          : "未知",
+      ),
+      metric("预计耗尽", etaText(estimate), "icr-metric-wide"),
+      metric("估算模型", "周期线性"),
       metric("数据来源", quotaWindow.source),
     );
     card.append(top, bar, metrics);

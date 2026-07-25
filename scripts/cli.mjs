@@ -1,9 +1,8 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
 import {
   copyFile,
   mkdir,
-  open,
   readFile,
   rename,
   rm,
@@ -11,14 +10,13 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createHash } from "node:crypto";
 import { extractFile } from "@electron/asar";
 import {
   INJECTION_START,
   buildPatchedAsar,
-  buildUnpatchedAsar,
   exists,
   inspectAsarCompatibility,
+  replaceFile,
   sha256File,
 } from "./patcher.mjs";
 
@@ -26,9 +24,14 @@ const root = path.resolve(import.meta.dirname, "..");
 const localAppData = process.env.LOCALAPPDATA;
 if (!localAppData) throw new Error("LOCALAPPDATA 未定义");
 const patchHome = path.join(localAppData, "isCodexRunOut");
+const backupRoot = path.join(patchHome, "codex_backup");
+const activeRoot = path.join(patchHome, "codex");
+const backupAsar = path.join(backupRoot, "app", "resources", "app.asar");
+const activeAsar = path.join(activeRoot, "app", "resources", "app.asar");
+const activeExecutable = path.join(activeRoot, "app", "ChatGPT.exe");
 const temporaryDirectory = path.join(patchHome, ".tmp");
-const directStatePath = path.join(patchHome, "direct-state.json");
-const legacyStatePath = path.join(patchHome, "state.json");
+const copyStatePath = path.join(patchHome, "copy-state.json");
+const redirectStatePath = path.join(patchHome, "redirect-state.json");
 const knownSourceHashes = new Map([
   [
     "44884f86d619a12c3c0af1b8c65945005bda4379775b03270674c666226ff4b7",
@@ -66,21 +69,26 @@ function detectCodexPackage() {
 }
 
 function sourcePaths(appPackage) {
-  const appRoot = path.join(appPackage.InstallLocation, "app");
   return {
-    appRoot,
-    executable: path.join(appRoot, "ChatGPT.exe"),
-    asar: path.join(appRoot, "resources", "app.asar"),
+    executable: path.join(appPackage.InstallLocation, "app", "ChatGPT.exe"),
+    asar: path.join(
+      appPackage.InstallLocation,
+      "app",
+      "resources",
+      "app.asar",
+    ),
   };
 }
 
-async function readDirectState() {
-  if (!(await exists(directStatePath))) return null;
-  const state = JSON.parse(await readFile(directStatePath, "utf8"));
-  if (!state || state.schema !== 1 || state.mode !== "direct") {
-    throw new Error("原位补丁状态文件版本不兼容");
+function ensureExactLayoutPath(actual, expected) {
+  if (path.resolve(actual).toLowerCase() !== path.resolve(expected).toLowerCase()) {
+    throw new Error(`布局路径不匹配：${actual}`);
   }
-  return state;
+}
+
+async function readJson(filePath) {
+  if (!(await exists(filePath))) return null;
+  return JSON.parse((await readFile(filePath, "utf8")).replace(/^\uFEFF/, ""));
 }
 
 async function writeJsonAtomic(filePath, value) {
@@ -110,50 +118,6 @@ function hasInjection(asarPath) {
   }
 }
 
-async function baseInspection() {
-  const appPackage = detectCodexPackage();
-  const source = sourcePaths(appPackage);
-  if (!(await exists(source.executable)) || !(await exists(source.asar))) {
-    throw new Error("当前 Codex AppX 缺少可执行文件或 app.asar");
-  }
-  const asarHash = await sha256File(source.asar);
-  const compatibility = inspectAsarCompatibility(source.asar, {
-    allowPatched: true,
-  });
-  const injectionPresent = hasInjection(source.asar);
-  return {
-    appPackage,
-    source,
-    asarHash,
-    injectionPresent,
-    compatibility,
-    sourceCompatibility:
-      knownSourceHashes.get(asarHash) ??
-      (injectionPresent ? "direct-patched-structural-compatible" : "structural-compatible"),
-  };
-}
-
-function publicInspection(inspection) {
-  return {
-    packageName: inspection.appPackage.Name,
-    packageFullName: inspection.appPackage.PackageFullName,
-    appxVersion: inspection.appPackage.Version,
-    installSource: inspection.appPackage.SignatureKind,
-    installLocation: inspection.appPackage.InstallLocation,
-    executable: inspection.source.executable,
-    asar: inspection.source.asar,
-    asarSha256: inspection.asarHash,
-    directPatchInstalled: inspection.injectionPresent,
-    compatibility: inspection.sourceCompatibility,
-    titlebarAnchor:
-      inspection.compatibility.anchors["group/application-menu-top-bar"],
-    usageEndpointAnchor: inspection.compatibility.anchors["/wham/usage"],
-    unpackedFileCount: inspection.compatibility.unpackedPaths.length,
-    backupCreated: false,
-    byteExactRestoreAvailable: false,
-  };
-}
-
 async function runBuild() {
   execFileSync(process.execPath, [path.join(root, "scripts", "build.mjs")], {
     cwd: root,
@@ -170,184 +134,161 @@ async function runBuild() {
   return outputs;
 }
 
-async function assertDirectWriteAccess(asarPath) {
-  try {
-    const handle = await open(asarPath, "r+");
-    await handle.close();
-  } catch {
-    throw new Error(
-      "WindowsApps app.asar 不可写；请使用仓库根目录 patch.cmd 或 uninstall.cmd 并批准 UAC",
-    );
-  }
-}
-
-async function removeLegacyCopyAndBackup() {
-  const targets = [
-    path.join(patchHome, "versions"),
-    path.join(patchHome, "backups"),
-    legacyStatePath,
-  ];
-  for (const target of targets) {
-    const relative = path.relative(patchHome, target);
-    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-      throw new Error(`拒绝清理补丁目录外路径：${target}`);
-    }
-    await rm(target, { recursive: true, force: true });
-  }
-}
-
-async function overwriteWithoutBackup(source, destination, expectedHash) {
-  if ((await sha256File(source)) !== expectedHash) {
-    throw new Error("待写入 ASAR 的哈希在覆盖前发生变化");
-  }
-  await copyFile(source, destination);
-  const writtenHash = await sha256File(destination);
-  if (writtenHash !== expectedHash) {
-    throw new Error("原位覆盖后的 ASAR 哈希校验失败；此模式没有备份可自动恢复");
-  }
-}
-
 async function commandInspect() {
-  console.log(JSON.stringify(publicInspection(await baseInspection()), null, 2));
+  const appPackage = detectCodexPackage();
+  const source = sourcePaths(appPackage);
+  const compatibility = inspectAsarCompatibility(source.asar, {
+    allowPatched: true,
+  });
+  const asarHash = await sha256File(source.asar);
+  console.log(
+    JSON.stringify(
+      {
+        packageName: appPackage.Name,
+        packageFullName: appPackage.PackageFullName,
+        appxVersion: appPackage.Version,
+        installSource: appPackage.SignatureKind,
+        installLocation: appPackage.InstallLocation,
+        asar: source.asar,
+        asarSha256: asarHash,
+        compatibility:
+          knownSourceHashes.get(asarHash) ?? "structural-compatible",
+        titlebarAnchor:
+          compatibility.anchors["group/application-menu-top-bar"],
+        usageEndpointAnchor: compatibility.anchors["/wham/usage"],
+      },
+      null,
+      2,
+    ),
+  );
 }
 
-async function commandDirectInstall() {
-  const inspection = await baseInspection();
-  await assertDirectWriteAccess(inspection.source.asar);
-  const outputs = await runBuild();
-  const expectedBundleHash = await sha256File(outputs.bundle);
-  const expectedStyleHash = await sha256File(outputs.style);
-  if (
-    inspection.injectionPresent &&
-    archiveFileHash(
-      inspection.source.asar,
-      "webview/assets/is-codex-run-out.js",
-    ) === expectedBundleHash &&
-    archiveFileHash(
-      inspection.source.asar,
-      "webview/assets/is-codex-run-out.css",
-    ) === expectedStyleHash
-  ) {
-    await removeLegacyCopyAndBackup();
-    console.log("当前 AppX 已安装同一补丁；未改写 app.asar，旧副本和备份已清理。");
-    return;
+async function commandCopyPatch() {
+  ensureExactLayoutPath(process.argv[3] ?? backupRoot, backupRoot);
+  ensureExactLayoutPath(process.argv[4] ?? activeRoot, activeRoot);
+  for (const filePath of [backupAsar, activeAsar, activeExecutable]) {
+    if (!(await exists(filePath))) {
+      throw new Error(`副本文件不存在：${filePath}`);
+    }
   }
 
-  const previousState = await readDirectState();
+  const appPackage = detectCodexPackage();
+  const source = sourcePaths(appPackage);
+  const sourceHash = await sha256File(source.asar);
+  const backupHash = await sha256File(backupAsar);
+  const activeOriginalHash = await sha256File(activeAsar);
+  if (sourceHash !== backupHash || sourceHash !== activeOriginalHash) {
+    throw new Error("codex_backup、codex 活动副本与 Store 源 ASAR 哈希不一致");
+  }
+  const compatibility = inspectAsarCompatibility(backupAsar);
+  const outputs = await runBuild();
+  const bundleHash = await sha256File(outputs.bundle);
+  const styleHash = await sha256File(outputs.style);
   const workingDirectory = path.join(
     temporaryDirectory,
-    `direct-install-${randomUUID()}`,
+    `copy-install-${randomUUID()}`,
   );
   const stagedAsar = path.join(workingDirectory, "app.asar");
   await mkdir(workingDirectory, { recursive: true });
   try {
     const result = await buildPatchedAsar({
-      sourceAsar: inspection.source.asar,
+      sourceAsar: backupAsar,
       destinationAsar: stagedAsar,
       bundlePath: outputs.bundle,
       stylePath: outputs.style,
       workingDirectory: path.join(workingDirectory, "work"),
     });
     await rm(result.outputUnpackedRoot, { recursive: true, force: true });
-    if ((await sha256File(inspection.source.asar)) !== inspection.asarHash) {
-      throw new Error("构建期间当前 AppX app.asar 发生变化");
+    if ((await sha256File(backupAsar)) !== backupHash) {
+      throw new Error("构建期间 codex_backup ASAR 发生变化");
     }
-    await overwriteWithoutBackup(
-      stagedAsar,
-      inspection.source.asar,
-      result.patchedAsarHash,
-    );
-    const state = {
+    await copyFile(stagedAsar, activeAsar);
+    if ((await sha256File(activeAsar)) !== result.patchedAsarHash) {
+      throw new Error("活动副本 ASAR 覆盖后哈希校验失败");
+    }
+    if (
+      !hasInjection(activeAsar) ||
+      archiveFileHash(activeAsar, "webview/assets/is-codex-run-out.js") !==
+        bundleHash ||
+      archiveFileHash(activeAsar, "webview/assets/is-codex-run-out.css") !==
+        styleHash
+    ) {
+      throw new Error("活动副本中的注入资源校验失败");
+    }
+    await writeJsonAtomic(copyStatePath, {
       schema: 1,
-      mode: "direct",
+      mode: "copy-redirect",
+      status: "installed",
       patchVersion: "0.1.0",
       installedAt: new Date().toISOString(),
-      packageFullName: inspection.appPackage.PackageFullName,
-      appxVersion: inspection.appPackage.Version,
-      installLocation: inspection.appPackage.InstallLocation,
-      asarPath: inspection.source.asar,
-      originalSourceHash:
-        previousState?.originalSourceHash ??
-        (inspection.injectionPresent ? null : inspection.asarHash),
+      packageFullName: appPackage.PackageFullName,
+      packageFamilyName: appPackage.PackageFamilyName,
+      appxVersion: appPackage.Version,
+      sourceRoot: appPackage.InstallLocation,
+      sourceAsar: source.asar,
+      sourceAsarHash: sourceHash,
+      backupRoot,
+      backupAsar,
+      activeRoot,
+      activeAsar,
+      activeExecutable,
       patchedAsarHash: result.patchedAsarHash,
-      bundleHash: expectedBundleHash,
-      styleHash: expectedStyleHash,
-      backupCreated: false,
-      byteExactRestoreAvailable: false,
-    };
-    await writeJsonAtomic(directStatePath, state);
-    await removeLegacyCopyAndBackup();
-    console.log("已直接修改当前 AppX app.asar；未创建备份。");
-    console.log(JSON.stringify(await statusDetails(), null, 2));
-  } finally {
-    await rm(workingDirectory, { recursive: true, force: true });
-  }
-}
-
-async function commandDirectUninstall() {
-  const inspection = await baseInspection();
-  await assertDirectWriteAccess(inspection.source.asar);
-  if (!inspection.injectionPresent) {
-    await rm(directStatePath, { force: true });
-    await removeLegacyCopyAndBackup();
-    console.log("当前 AppX 没有补丁注入；未改写 app.asar。");
-    return;
-  }
-  const workingDirectory = path.join(
-    temporaryDirectory,
-    `direct-uninstall-${randomUUID()}`,
-  );
-  const stagedAsar = path.join(workingDirectory, "app.asar");
-  await mkdir(workingDirectory, { recursive: true });
-  try {
-    const result = await buildUnpatchedAsar({
-      sourceAsar: inspection.source.asar,
-      destinationAsar: stagedAsar,
-      workingDirectory: path.join(workingDirectory, "work"),
+      bundleHash,
+      styleHash,
+      titlebarAnchor:
+        compatibility.anchors["group/application-menu-top-bar"],
+      usageEndpointAnchor: compatibility.anchors["/wham/usage"],
     });
-    await rm(result.outputUnpackedRoot, { recursive: true, force: true });
-    if ((await sha256File(inspection.source.asar)) !== inspection.asarHash) {
-      throw new Error("卸载构建期间当前 AppX app.asar 发生变化");
-    }
-    await overwriteWithoutBackup(
-      stagedAsar,
-      inspection.source.asar,
-      result.unpatchedAsarHash,
-    );
-    await rm(directStatePath, { force: true });
-    await removeLegacyCopyAndBackup();
-    console.log(
-      "补丁资源已从当前 AppX 移除；未恢复微软原始字节级哈希，也没有备份可恢复。",
-    );
+    console.log("活动副本已覆盖为最新补丁，Store 源目录未修改。");
   } finally {
     await rm(workingDirectory, { recursive: true, force: true });
   }
 }
 
 async function statusDetails() {
-  const inspection = await baseInspection();
-  const state = await readDirectState();
+  const state = await readJson(copyStatePath);
+  const appPackage = detectCodexPackage();
+  const source = sourcePaths(appPackage);
+  const sourceHash = (await exists(source.asar))
+    ? await sha256File(source.asar)
+    : null;
+  if (!state || state.schema !== 1 || state.mode !== "copy-redirect") {
+    return {
+      installed: false,
+      mode: "copy-redirect",
+      appxVersion: appPackage.Version,
+      sourceAsar: source.asar,
+      sourceAsarHash: sourceHash,
+    };
+  }
+  const activeHash = (await exists(state.activeAsar))
+    ? await sha256File(state.activeAsar)
+    : null;
+  const backupHash = (await exists(state.backupAsar))
+    ? await sha256File(state.backupAsar)
+    : null;
+  const redirects = await readJson(redirectStatePath);
   return {
-    installed: inspection.injectionPresent,
-    mode: "direct-no-backup",
-    patchVersion: state?.patchVersion ?? null,
-    appxVersion: inspection.appPackage.Version,
-    packageFullName: inspection.appPackage.PackageFullName,
-    installLocation: inspection.appPackage.InstallLocation,
-    asarPath: inspection.source.asar,
-    currentAsarHash: inspection.asarHash,
-    expectedPatchedAsarHash: state?.patchedAsarHash ?? null,
-    stateMatches:
-      inspection.injectionPresent &&
-      state?.packageFullName === inspection.appPackage.PackageFullName &&
-      state?.patchedAsarHash === inspection.asarHash,
-    injectionPresent: inspection.injectionPresent,
-    backupCreated: false,
-    byteExactRestoreAvailable: false,
-    titlebarLayout: "normal-flow flex child, right aligned",
-    dragModel: "slot=drag, widget=no-drag",
-    warning:
-      "AppX 已被原位修改；卸载只能去掉注入，微软原始哈希需通过商店修复或重装恢复。",
+    installed:
+      state.status === "installed" &&
+      activeHash === state.patchedAsarHash &&
+      hasInjection(state.activeAsar),
+    mode: state.mode,
+    patchVersion: state.patchVersion,
+    appxVersion: state.appxVersion,
+    currentAppxVersion: appPackage.Version,
+    sourceUntouched: sourceHash === state.sourceAsarHash,
+    backupValid: backupHash === state.sourceAsarHash,
+    backupRoot: state.backupRoot,
+    activeRoot: state.activeRoot,
+    activeExecutable: state.activeExecutable,
+    activeAsarHash: activeHash,
+    expectedPatchedAsarHash: state.patchedAsarHash,
+    injectionPresent: activeHash ? hasInjection(state.activeAsar) : false,
+    shortcutsRedirected: Boolean(redirects?.shortcuts?.length),
+    environmentRedirected: Boolean(redirects?.environment),
+    titlebarLayout: "adaptive normal-flow flex child, right aligned",
+    etaModel: "cycle-linear",
   };
 }
 
@@ -355,45 +296,48 @@ async function commandStatus() {
   console.log(JSON.stringify(await statusDetails(), null, 2));
 }
 
-function runningCodexProcesses() {
-  const output = runPowerShell(
-    "@(Get-CimInstance Win32_Process -Filter \"Name = 'ChatGPT.exe'\" | ForEach-Object { [pscustomobject]@{ ProcessId = $_.ProcessId; ExecutablePath = $_.ExecutablePath } }) | ConvertTo-Json -Compress",
-  );
-  if (!output) return [];
-  const parsed = JSON.parse(output);
-  return Array.isArray(parsed) ? parsed : [parsed];
-}
-
 async function commandLaunch() {
-  const inspection = await baseInspection();
-  if (!inspection.injectionPresent) {
-    throw new Error("当前 AppX 尚未安装补丁");
+  const state = await readJson(copyStatePath);
+  const status = await statusDetails();
+  if (!state || !status.installed) {
+    throw new Error("补丁活动副本未安装或校验失败");
   }
-  if (runningCodexProcesses().length > 0) {
-    throw new Error("Codex 正在运行；请先退出后再启动");
-  }
-  const child = spawn(inspection.source.executable, [], {
-    cwd: inspection.source.appRoot,
+  const child = spawn(state.activeExecutable, [], {
+    cwd: path.dirname(state.activeExecutable),
     detached: true,
     stdio: "ignore",
   });
   child.unref();
-  console.log(`已启动原位补丁 AppX：${inspection.source.executable}`);
+  console.log(`已启动补丁副本：${state.activeExecutable}`);
 }
 
-async function commandRestoreUnsupported() {
-  throw new Error(
-    "原位无备份模式不支持字节级恢复；可运行 uninstall.cmd 移除注入，或用微软商店修复/重装恢复原包",
-  );
+async function commandRestore() {
+  const state = await readJson(copyStatePath);
+  if (!state) throw new Error("补丁状态不存在");
+  if ((await sha256File(state.backupAsar)) !== state.sourceAsarHash) {
+    throw new Error("codex_backup ASAR 哈希不匹配");
+  }
+  await replaceFile(state.backupAsar, state.activeAsar);
+  if ((await sha256File(state.activeAsar)) !== state.sourceAsarHash) {
+    throw new Error("活动副本恢复校验失败");
+  }
+  state.status = "restored";
+  state.restoredAt = new Date().toISOString();
+  await writeJsonAtomic(copyStatePath, state);
+  console.log("活动副本已从 codex_backup 恢复为原始 ASAR。");
+}
+
+async function commandForget() {
+  await rm(copyStatePath, { force: true });
 }
 
 const commands = {
   inspect: commandInspect,
-  "direct-install": commandDirectInstall,
-  "direct-uninstall": commandDirectUninstall,
+  "copy-patch": commandCopyPatch,
   status: commandStatus,
   launch: commandLaunch,
-  restore: commandRestoreUnsupported,
+  restore: commandRestore,
+  forget: commandForget,
 };
 
 export async function main(argv = process.argv.slice(2)) {

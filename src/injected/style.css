@@ -165,6 +165,7 @@
     0 18px 40px rgb(0 0 0 / 0.16),
     0 4px 12px rgb(0 0 0 / 0.1);
   box-sizing: border-box;
+  color-scheme: inherit;
   color: var(--color-text-foreground, #171717);
   font-family: inherit;
   font-size: 13px;
@@ -246,13 +247,20 @@
 }
 
 .icr-button-primary {
-  background: var(--color-background-button-primary, currentColor);
+  background: var(--color-text-foreground, CanvasText);
   border-color: transparent;
-  color: var(--color-text-button-primary, Canvas);
+  color: var(
+    --color-background-elevated-primary-opaque,
+    var(--color-background-surface, Canvas)
+  );
 }
 
 .icr-button-primary:hover {
-  background: var(--color-background-button-primary-hover, currentColor);
+  background: color-mix(
+    in srgb,
+    var(--color-text-foreground, CanvasText) 86%,
+    transparent
+  );
 }
 
 .icr-window-list {

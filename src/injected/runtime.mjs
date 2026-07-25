@@ -175,10 +175,8 @@ export class QuotaRuntime {
         window.id,
         estimateEta({
           window,
-          samples: this.history.samplesFor(window.id),
           now,
           freshness,
-          effectiveIntervalMs: effectiveInterval || 300_000,
         }),
       );
     }
