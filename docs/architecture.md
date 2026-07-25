@@ -7,6 +7,7 @@
 
 - slot：`flex: 1 1 auto`、`-webkit-app-region: drag`
 - widget：24 px 高、`-webkit-app-region: no-drag`
+- widget 在 slot 内右对齐，位于原生窗口按钮安全区左侧；剩余拖动区域在其左侧
 - 面板：只在点击时创建，关闭时销毁
 - 原标题栏高度、第二行页面 header、侧栏和窗口按钮 DOM 不修改
 - Owl 已有的窗口按钮安全 padding 和 `windowControlsOverlay` 区域继续生效

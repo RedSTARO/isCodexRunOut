@@ -60,6 +60,8 @@ npm test
 - slot parent 为第一行标题栏
 - 标题栏和 slot 高度均为 36 px，没有增加高度
 - slot 是 `drag`，widget 是 `no-drag`
+- widget 在标题栏可用 slot 内右对齐，右边界仍受 native safe area 检查
+- 右对齐复测：slot 右边界 1143 px，widget 右边界 1135 px，保留 8 px 内边距，`justify-content=flex-end`，safe area 为 `valid`
 - 第二行页面 header 从 y=36 开始，没有被注入
 - 点击组件可打开详情面板，Escape 可关闭
 - `initialRoute=/avatar-overlay` 的辅助窗口没有创建补丁实例
