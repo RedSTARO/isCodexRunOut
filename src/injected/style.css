@@ -78,6 +78,15 @@
   font-variant-numeric: tabular-nums;
 }
 
+.icr-widget-separator {
+  align-items: center;
+  display: inline-flex;
+  flex: 0 0 auto;
+  justify-content: center;
+  opacity: 0.45;
+  width: 4px;
+}
+
 .icr-widget-progress {
   background: color-mix(
     in srgb,
@@ -126,6 +135,7 @@
 }
 
 .icr-titlebar-slot[data-mode="percent"] .icr-widget-name,
+.icr-titlebar-slot[data-mode="percent"] .icr-widget-separator,
 .icr-titlebar-slot[data-mode="percent"] .icr-widget-progress,
 .icr-titlebar-slot[data-mode="percent"] .icr-widget-eta,
 .icr-titlebar-slot[data-mode="percent"] .icr-widget-reset,

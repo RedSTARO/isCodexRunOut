@@ -326,6 +326,7 @@ export class QuotaTitlebarUi {
       "icr-widget-percent",
       formatPercent(primary.remainingPercent),
     );
+    const separator = node("span", "icr-widget-separator", "·");
     const progress = node("span", "icr-widget-progress");
     const fill = node("span", "icr-widget-progress-fill");
     fill.style.width = `${primary.remainingPercent}%`;
@@ -343,7 +344,7 @@ export class QuotaTitlebarUi {
       `icr-widget-status icr-status-${status}`,
       STATUS_TEXT[status] ?? status,
     );
-    this.widget.append(name, percent);
+    this.widget.append(name, separator, percent);
     if (this.state.config.showProgress) this.widget.append(progress);
     if (this.state.config.showEta && this.state.config.etaEnabled) {
       this.widget.append(eta);

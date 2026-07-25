@@ -9,11 +9,11 @@
     "check": "node scripts/check.mjs",
     "test": "node --test",
     "inspect": "node scripts/cli.mjs inspect",
-    "install:patch": "node scripts/cli.mjs install",
+    "install:patch": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/direct-operation.ps1 -Operation patch",
     "status": "node scripts/cli.mjs status",
     "launch": "node scripts/cli.mjs launch",
     "restore": "node scripts/cli.mjs restore",
-    "uninstall:patch": "node scripts/cli.mjs uninstall"
+    "uninstall:patch": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/direct-operation.ps1 -Operation uninstall"
   },
   "dependencies": {
     "@electron/asar": "4.0.1"

@@ -98,6 +98,8 @@ type=fetch-response, requestId, responseType, status, headers, bodyJsonString
 
 ## 选定的修改方式
 
-`WindowsApps` 受签名和 ACL 保护，直接改写会破坏包完整性，也会干扰商店更新。当前方案保留商店包不变，在 `%LOCALAPPDATA%` 创建完整可写应用副本，只有副本内的 ASAR 被替换。最终运行的仍是修改后的 `ChatGPT.exe` 应用本体，不是外部窗口。
+`WindowsApps` 的实际 owner 为 `SYSTEM`，普通用户只有读取/执行权限，`TrustedInstaller` 和 `SYSTEM` 有 FullControl。本机中以 medium integrity 打开 `app.asar` 写句柄实际返回 Access denied。
 
-代价是商店快捷方式不会自动指向补丁副本；必须用 `npm run launch` 启动。商店更新后要重新检测和生成副本。
+根据当前要求，补丁脚本通过 UAC 提升后临时取得单个 `app.asar` 的 ownership/write ACL，在本地临时目录完成重打包和校验，再直接覆盖当前 Store 文件并恢复 ACL/owner。没有外部悬浮窗口、完整应用副本或原版 ASAR 备份，标准商店入口直接运行被修改的应用。
+
+该方式会使包内容偏离签名发布状态，可能干扰 AppX 完整性、修复和自动更新。卸载只能删除注入，字节级官方恢复依赖 Microsoft Store 修复或重装。

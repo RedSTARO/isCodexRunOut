@@ -15,6 +15,7 @@ const files = [
   "scripts/build.mjs",
   "scripts/patcher.mjs",
   "scripts/cli.mjs",
+  "scripts/direct-operation.ps1",
 ].map((file) => path.join(root, file));
 
 const forbidden = [

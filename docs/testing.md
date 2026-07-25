@@ -20,32 +20,27 @@ npm test
 - 历史去重、损坏隔离
 - in-flight 去重、429、认证失败、不兼容停止和指数退避
 - HTML 单次注入
-- ASAR 解包/重打包集成测试，包括 unpacked 集合与内容哈希
+- ASAR patch、重复 patch、unpatch 往返测试，包括 unpacked 集合与内容哈希
 - 恢复文件的校验、切换和临时文件清理
 
-## 安装、回滚和卸载
+## 原位 patch/unpatch
 
-本机完整执行并验证：
+普通权限下对 Store `app.asar` 打开写句柄的实测结果为 Access denied；文件 owner 为 `SYSTEM`，`TrustedInstaller`/`SYSTEM` 有 FullControl，Users 只有 Read/Execute。因此一键脚本必须经过 UAC、`takeown` 和临时 ACL grant。
 
-| 场景 | 结果 |
-|---|---|
-| 首次安装 | 通过 |
-| 重复安装 | 通过，未修改文件 |
-| 原商店 ASAR 保持原哈希 | 通过 |
-| 原版备份哈希 | 通过 |
-| 补丁 ASAR 注入标记与哈希 | 通过 |
-| 恢复 | 通过，目标回到原始哈希 |
-| 重复恢复 | 通过，未修改应用文件 |
-| 卸载 | 通过 |
-| 重复卸载 | 通过，未修改文件 |
-| 卸载后重新安装 | 通过 |
+直接运行 `node scripts/cli.mjs direct-install` 会在构建和写入前 fail-fast，并在失败后再次确认 Store ASAR 仍保持原始 SHA-256。
 
-当前自适应构建安装后的补丁 ASAR SHA-256 为
-`ce4704956574a8b13a54fc7fc8b987f7812adc9c0bbf46dcd4a4c80cc21f3089`。
-商店原 ASAR 仍为
-`44884f86d619a12c3c0af1b8c65945005bda4379775b03270674c666226ff4b7`。
+在不写 `WindowsApps` 的情况下，以真实 Store ASAR 完成了临时目录 patch→unpatch 往返：
 
-安装失败路径由随机 staging、源哈希复检和 `finally` 清理实现；单元测试覆盖重打包失败，首次真实安装前还实际中断过一个未进入复制阶段的命令，未留下状态或改写源文件。没有故意破坏 1.8 GiB 实际安装副本来制造每一种中途 I/O 错误。
+- 输入原始哈希：`44884f86d619a12c3c0af1b8c65945005bda4379775b03270674c666226ff4b7`
+- 候选补丁哈希：`f308372e1beb459d3a9373abc307cb0b52b86834875191cee3b92c3b64c5109e`
+- unpatch 重打包哈希：`93db607e04b9eaa3d139d7b9ef5eb5b2678b66f68ac3492efb0639c46a2400aa`
+- unpacked 文件数：37，集合和内容哈希一致
+- 往返后 Store 源哈希未变化
+- unpatch 哈希与 Store 原哈希不同，证明无备份卸载不能声称字节级恢复
+
+自提权脚本已通过 PowerShell parser 检查，但没有在本任务进程内执行管理员覆盖：脚本会关闭正在承载本任务的 Codex。实际原位覆盖需要用户双击 `patch.cmd` 并批准 UAC。
+
+原位覆盖没有自动回滚或备份。候选在覆盖前完成全部结构和哈希检查，但覆盖本身若失败只能由 Store 修复/重装。
 
 ## 实际窗口与自适应
 
@@ -79,6 +74,8 @@ npm test
 
 正常 fresh 状态在所有档位均不占标题栏；异常状态只在空间允许时显示。组件收缩时没有覆盖左侧菜单或右侧 native safe area。
 
+当前构建在额度名称与百分比之间插入 `icr-widget-separator`，文本为居中点 `·`，opacity 为 0.45；仅百分比档位会同时隐藏名称和分隔点。
+
 ## 真实数据行为
 
 - 已实际收到 Codex 自身 `/wham/usage` 请求结果并显示多个真实额度窗口。
@@ -97,4 +94,4 @@ npm test
 - 实际认证失效、服务端字段突变和 Credits 消费：只做了合成错误测试。
 - 完整发起 Codex 编码任务、终端和插件业务回归：测试副本能启动、渲染主页并读取额度，但未在独立空白配置中执行真实任务。
 
-人工验收时应关闭当前原版，用 `npm run launch` 启动补丁版，逐项验证双击、右键、最大化、侧栏开关和一段正常任务流程。
+人工验收时应双击 `patch.cmd`，批准 UAC，等待标准 Store 入口重启后逐项验证双击、右键、最大化、侧栏开关和一段正常任务流程。

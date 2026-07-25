@@ -1,6 +1,6 @@
 # isCodexRunOut
 
-这是一个针对当前 Windows 版 Codex Desktop 的本地、可回滚标题栏补丁。它把额度组件作为 Codex 第一行应用菜单标题栏中的普通 flex 子项注入，不创建外部悬浮窗，也不增加第二层标题栏。
+这是针对当前 Windows Codex Desktop 的原位标题栏补丁。它直接重打包 Microsoft Store 安装目录中的 `app\resources\app.asar`，标准商店入口随后运行修改后的应用本体。
 
 当前本机已验证版本：
 
@@ -10,75 +10,71 @@
 - 原始 `app.asar` SHA-256：`44884f86d619a12c3c0af1b8c65945005bda4379775b03270674c666226ff4b7`
 - 技术栈：Owl/Chromium 150，Electron 兼容 ASAR WebView
 
-其他版本必须先通过结构探测，不能仅凭版本号假定兼容。
+## 先明确风险
 
-## 使用
+该模式：
 
-要求 Node.js 22.12 或更高版本。当前实现已在 Node.js 24.16.0 验证。
+- 需要管理员权限并修改 `WindowsApps` 中文件的 ACL。
+- 不创建原始 ASAR 备份。
+- 会使已签名 AppX 的文件内容偏离微软发布版本。
+- 可能导致商店更新、包修复或启动完整性检查失败。
+- 卸载只能删除补丁注入并重新打包，不能恢复微软原始字节级哈希。
+- 需要恢复官方文件时，只能使用 Microsoft Store 的修复、重置或重装。
+
+这是当前实现的预期行为，不是可忽略的告警。
+
+## 一键使用
+
+要求 Node.js 22.12 或更高版本，并先在仓库中安装依赖：
 
 ```powershell
 npm install
+```
+
+随后双击：
+
+- `patch.cmd`：请求 UAC、关闭所有 Codex 实例、直接 patch 当前 AppX、恢复文件 ACL、从标准商店入口重启 Codex。
+- `uninstall.cmd`：请求 UAC、关闭 Codex、从当前 ASAR 移除注入、恢复 ACL、重启 Codex。
+
+两个脚本均可重复执行。`patch.cmd` 检测到相同构建时不会再次写入；`uninstall.cmd` 检测不到注入时不会写入。
+
+也可从终端运行：
+
+```powershell
 npm run inspect
-npm test
 npm run install:patch
-```
-
-安装不会改写 `C:\Program Files\WindowsApps`。它在
-`%LOCALAPPDATA%\isCodexRunOut` 建立原版备份和可写应用副本。安装完成后，先正常退出所有正在运行的 Codex，再启动补丁副本：
-
-```powershell
-npm run launch
-```
-
-微软商店快捷方式仍启动微软商店管理的原版。补丁版必须使用上面的启动命令；这是保持原签名目录和自动更新不被破坏的代价。
-
-常用维护命令：
-
-```powershell
 npm run status
-npm run restore
 npm run uninstall:patch
 ```
 
-- `status`：检查商店更新、源文件哈希、备份、补丁 ASAR 和注入标记。
-- `restore`：把本地应用副本恢复为备份的原版 ASAR，保留副本和备份。
-- `uninstall:patch`：先恢复，再删除本地副本、状态和备份。用户配置及额度历史不会被直接删除。
-- 重复安装、恢复和卸载都是幂等操作。
-- 恢复或卸载时若补丁版仍在运行，命令会直接失败，避免覆盖运行中的资源。
+`npm run restore` 在无备份模式下会直接报错。卸载后的 ASAR 是功能上未注入的重打包版本，不等于 Store 原始哈希。
 
-Codex 更新后，`status` 会报告 `updateDetected: true`，`launch` 会拒绝启动旧副本。处理流程：
+## 标题栏
 
-```powershell
-npm run uninstall:patch
-npm run inspect
-npm test
-npm run install:patch
+组件位于 Codex 第一行应用菜单标题栏中，作为普通 flex 子项右对齐在原生窗口按钮安全区左侧。默认文本形态为：
+
+```text
+7d · 13%
 ```
 
-如果新版本缺少已验证的标题栏、请求桥或数据结构锚点，安装会 fail-fast。
-
-## 界面与配置
-
-组件根据标题栏实时可用空间逐档降级：
+中间使用半透明居中点分隔。组件根据实时可用空间逐档降级：
 
 `完整 → 隐藏状态 → 隐藏重置 → 隐藏 ETA → 隐藏进度条 → 仅百分比 → 整体隐藏`
 
-实际实现保留一部分标题栏拖动空间，并测量当前内容宽度后选档，不依赖固定窗口宽度。正常“最新”状态不占标题栏；离线、过期、限流、认证失败或接口不兼容时才显示状态。
+正常“最新”状态不占标题栏；离线、过期、限流、认证失败或接口不兼容时才显示状态。slot 保持 `drag`，组件交互区为 `no-drag`。
 
-点击组件打开详情面板。可配置：
+## 数据与配置
 
-- 主额度自动或固定选择、额度窗口可见性
-- 标准/紧凑密度以及进度、ETA、重置、状态和时间格式
+补丁优先旁听 Codex 自身 `/wham/usage` 请求结果。需要补充刷新时复用 Codex 主进程请求桥，由主进程附加认证；补丁不读取、保存或输出令牌、Cookie 或认证值。
+
+点击组件可配置：
+
+- 主额度和额度窗口可见性
+- 标准/紧凑密度、进度、ETA、重置、状态与时间格式
 - 关闭、预设或自定义补充轮询（30 秒至 24 小时）
-- 后台倍率或固定后台周期、隐藏暂停、上线/启动刷新
-- 请求超时、历史保留、调试日志、清空历史和恢复默认值
+- 后台倍率或固定周期、隐藏暂停、上线/启动刷新
+- 请求超时、历史保留、调试日志、清空历史与恢复默认
 
-组件关闭后可用 `Ctrl+Alt+Q` 打开配置。设置即时写入 Codex 用户配置目录对应 WebView origin 的 `localStorage`。
+ETA 是本地历史采样的统计估计，不是官方预测。样本不足、无明显消费或数据过期时不会输出具体耗尽时间。
 
-## 数据与限制
-
-补丁优先旁听 Codex 自身 `/wham/usage` 请求结果。需要补充刷新时，它复用 Codex 已有主进程请求桥，由主进程附加认证；补丁代码不读取、保存或输出令牌、Cookie 或认证头的值。
-
-预计耗尽时间是本地采样的统计估计，不是官方预测。样本不足、无明显消费或数据过期时不会输出具体 ETA；预计耗尽晚于重置时显示“本周期预计不会耗尽”。
-
-已确认的限制和未完成的人工验收见 [测试记录](docs/testing.md)；逆向依据见 [逆向分析](docs/reverse-engineering.md)；故障处理见 [故障排查](docs/troubleshooting.md)。
+详细依据见 [逆向分析](docs/reverse-engineering.md)、[架构](docs/architecture.md)、[测试记录](docs/testing.md) 和 [故障排查](docs/troubleshooting.md)。

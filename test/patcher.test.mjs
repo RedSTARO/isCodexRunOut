@@ -17,6 +17,7 @@ import {
 import {
   INJECTION_START,
   buildPatchedAsar,
+  buildUnpatchedAsar,
   inspectAsarCompatibility,
   patchIndexHtml,
   replaceFile,
@@ -112,6 +113,41 @@ test("ASAR 重打包保留 unpacked 集合与内容", async () => {
       await readFile(bundle, "utf8"),
     );
     assert.equal(result.compatibility.compatible, true);
+
+    assert.throws(() => inspectAsarCompatibility(destinationAsar));
+    assert.equal(
+      inspectAsarCompatibility(destinationAsar, { allowPatched: true })
+        .compatible,
+      true,
+    );
+
+    const reappliedAsar = path.join(directory, "reapplied.asar");
+    await buildPatchedAsar({
+      sourceAsar: destinationAsar,
+      destinationAsar: reappliedAsar,
+      bundlePath: bundle,
+      stylePath: style,
+      workingDirectory: path.join(directory, "reapply-work"),
+    });
+    const reappliedIndex = extractFile(
+      reappliedAsar,
+      path.join("webview", "index.html"),
+    ).toString("utf8");
+    assert.equal(reappliedIndex.split(INJECTION_START).length - 1, 1);
+
+    const unpatchedAsar = path.join(directory, "unpatched.asar");
+    const unpatched = await buildUnpatchedAsar({
+      sourceAsar: reappliedAsar,
+      destinationAsar: unpatchedAsar,
+      workingDirectory: path.join(directory, "uninstall-work"),
+    });
+    assert.equal(
+      extractFile(unpatchedAsar, path.join("webview", "index.html"))
+        .toString("utf8")
+        .includes(INJECTION_START),
+      false,
+    );
+    assert.equal(unpatched.compatibility.compatible, true);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

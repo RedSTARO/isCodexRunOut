@@ -8,6 +8,7 @@
 - slot：`flex: 1 1 auto`、`-webkit-app-region: drag`
 - widget：24 px 高、`-webkit-app-region: no-drag`
 - widget 在 slot 内右对齐，位于原生窗口按钮安全区左侧；剩余拖动区域在其左侧
+- 名称和百分比之间使用 opacity 0.45 的居中点 `·` 分隔，例如 `7d · 13%`
 - 面板：只在点击时创建，关闭时销毁
 - 原标题栏高度、第二行页面 header、侧栏和窗口按钮 DOM 不修改
 - Owl 已有的窗口按钮安全 padding 和 `windowControlsOverlay` 区域继续生效
@@ -83,16 +84,22 @@ ETA 只使用同一重置周期的有效样本：
 - 数据超过约 2 个有效轮询周期为 stale，超过约 5 个周期为 expired；expired 停止具体 ETA。
 - ETA 晚于本周期重置时间时只返回 `safe-through-reset`。
 
-## 补丁和回滚
+## 原位补丁与卸载
 
-商店安装目录全程只读。安装流程：
+当前模式直接修改 Store AppX 的 `app\resources\app.asar`，不创建原版备份。
 
-1. 探测 AppX、哈希、CSP、标题栏和数据锚点。
-2. 在 `%LOCALAPPDATA%\isCodexRunOut\backups` 建立原版 ASAR 备份并核对 SHA-256。
-3. 把完整 `app` 复制到随机 staging 目录。
-4. 解包 staging ASAR，加入两个自有静态资源和 HTML 标记。
-5. 按原版 37 个 unpacked 路径精确重打包。
-6. 逐个核对 unpacked 集合和内容哈希、注入资源哈希及 HTML 标记。
-7. 再次核对商店源哈希，最后原子重命名 staging 并写状态文件。
+一键脚本流程：
 
-中途失败会删除 staging 和工作目录；商店源无需恢复，因为从未改写。恢复只接受“已记录补丁哈希”或“已记录原版哈希”，遇到第三种哈希直接拒绝覆盖。
+1. 请求管理员权限。
+2. 定位当前 `OpenAI.Codex` 包和 `app.asar`，校验路径仍位于该包目录。
+3. 关闭商店版和旧本地副本的所有 `ChatGPT.exe` 进程。
+4. 用 `takeown` 和 `icacls` 临时取得目标文件写权限。
+5. 在 `%LOCALAPPDATA%\isCodexRunOut\.tmp` 构建候选 ASAR。
+6. 校验标题栏/数据锚点、37 个 unpacked 路径及内容哈希、补丁资源哈希和 HTML 标记。
+7. 不创建备份，直接以候选 ASAR 覆盖当前 AppX 文件，再核对写入哈希。
+8. 恢复继承 ACL 和 `TrustedInstaller` owner。
+9. 删除旧的可写副本与备份目录，从标准 AppsFolder 入口重启 Codex。
+
+卸载使用当前已 patch 的 ASAR作为输入，删除注入 HTML 和两个补丁资源，再执行同样的校验与原位覆盖。因此卸载只保证功能上移除补丁，不保证恢复 Store 原始 ASAR 的文件顺序或 SHA-256。
+
+覆盖发生在最后一步，但该模式没有自动回滚来源。覆盖中发生磁盘或进程级故障时，只能使用 Microsoft Store 修复、重置或重装。

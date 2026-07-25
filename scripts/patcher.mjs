@@ -95,6 +95,12 @@ export function patchIndexHtml(source) {
   return source.replace(moduleScript, `${INJECTION}\n    $&`);
 }
 
+export function stripInjection(source) {
+  const pattern =
+    /<!-- isCodexRunOut:start v[^>]+ -->[\s\S]*?<!-- isCodexRunOut:end -->\s*/g;
+  return source.replace(pattern, "");
+}
+
 function extractText(asarPath, archivePath) {
   return extractFile(
     asarPath,
@@ -102,7 +108,10 @@ function extractText(asarPath, archivePath) {
   ).toString("utf8");
 }
 
-export function inspectAsarCompatibility(asarPath) {
+export function inspectAsarCompatibility(
+  asarPath,
+  { allowPatched = false } = {},
+) {
   const { header } = getRawHeader(asarPath);
   const files = listArchiveFiles(header);
   const fileNames = new Set(files.map((entry) => entry.path));
@@ -111,7 +120,7 @@ export function inspectAsarCompatibility(asarPath) {
     throw new Error("ASAR 中不存在 webview/index.html");
   }
   const index = extractText(asarPath, indexPath);
-  if (index.includes(INJECTION_START)) {
+  if (!allowPatched && index.includes(INJECTION_START)) {
     throw new Error("商店源 ASAR 已被补丁修改，拒绝继续");
   }
   const decodedCspQuotes = index.replaceAll("&#39;", "'");
@@ -184,13 +193,15 @@ export async function buildPatchedAsar({
   stylePath,
   workingDirectory,
 }) {
-  const compatibility = inspectAsarCompatibility(sourceAsar);
+  const compatibility = inspectAsarCompatibility(sourceAsar, {
+    allowPatched: true,
+  });
   const extractedDirectory = path.join(workingDirectory, "extracted");
   await mkdir(workingDirectory, { recursive: true });
   extractAll(sourceAsar, extractedDirectory);
 
   const indexPath = path.join(extractedDirectory, "webview", "index.html");
-  const index = await readFile(indexPath, "utf8");
+  const index = stripInjection(await readFile(indexPath, "utf8"));
   await writeFile(indexPath, patchIndexHtml(index), "utf8");
   const assetDirectory = path.join(extractedDirectory, "webview", "assets");
   await Promise.all([
@@ -264,6 +275,72 @@ export async function buildPatchedAsar({
     compatibility,
     patchedAsarHash: await sha256File(destinationAsar),
     outputUnpackedRoot,
+  };
+}
+
+export async function buildUnpatchedAsar({
+  sourceAsar,
+  destinationAsar,
+  workingDirectory,
+}) {
+  const compatibility = inspectAsarCompatibility(sourceAsar, {
+    allowPatched: true,
+  });
+  const currentIndex = extractText(sourceAsar, "webview/index.html");
+  if (!currentIndex.includes(INJECTION_START)) {
+    throw new Error("当前 ASAR 没有 isCodexRunOut 注入标记");
+  }
+  const extractedDirectory = path.join(workingDirectory, "extracted");
+  await mkdir(workingDirectory, { recursive: true });
+  extractAll(sourceAsar, extractedDirectory);
+
+  const indexPath = path.join(extractedDirectory, "webview", "index.html");
+  await writeFile(
+    indexPath,
+    stripInjection(await readFile(indexPath, "utf8")),
+    "utf8",
+  );
+  const assetDirectory = path.join(extractedDirectory, "webview", "assets");
+  await Promise.all([
+    rm(path.join(assetDirectory, "is-codex-run-out.js"), { force: true }),
+    rm(path.join(assetDirectory, "is-codex-run-out.css"), { force: true }),
+  ]);
+
+  const unpackGlob = exactUnpackGlob(
+    compatibility.unpackedPaths,
+    extractedDirectory,
+  );
+  await createPackageWithOptions(extractedDirectory, destinationAsar, {
+    ...(unpackGlob ? { unpack: unpackGlob } : {}),
+  });
+  const outputUnpacked = unpackedArchivePaths(destinationAsar);
+  if (
+    JSON.stringify(outputUnpacked) !==
+    JSON.stringify(compatibility.unpackedPaths)
+  ) {
+    throw new Error("卸载重打包后的 unpacked 文件集合与当前应用不一致");
+  }
+  await compareUnpackedFiles(
+    `${sourceAsar}.unpacked`,
+    `${destinationAsar}.unpacked`,
+    compatibility.unpackedPaths,
+  );
+
+  const { header } = getRawHeader(destinationAsar);
+  const files = new Set(listArchiveFiles(header).map((entry) => entry.path));
+  if (
+    extractText(destinationAsar, "webview/index.html").includes(
+      "isCodexRunOut:",
+    ) ||
+    files.has("webview/assets/is-codex-run-out.js") ||
+    files.has("webview/assets/is-codex-run-out.css")
+  ) {
+    throw new Error("卸载重打包后仍存在补丁资源");
+  }
+  return {
+    compatibility,
+    unpatchedAsarHash: await sha256File(destinationAsar),
+    outputUnpackedRoot: `${destinationAsar}.unpacked`,
   };
 }
 
