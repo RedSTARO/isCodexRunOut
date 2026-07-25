@@ -1,6 +1,6 @@
 # isCodexRunOut
 
-这是针对当前 Windows Codex Desktop 的原位标题栏补丁。它直接重打包 Microsoft Store 安装目录中的 `app\resources\app.asar`，标准商店入口随后运行修改后的应用本体。
+这是针对当前 Windows Codex Desktop 的标题栏补丁。它从 Microsoft Store 安装目录创建本地副本，只重打包副本中的 `app\resources\app.asar`，再通过快捷方式启动修改后的应用本体。
 
 当前本机已验证版本：
 
@@ -14,29 +14,22 @@
 
 该模式：
 
-- 需要管理员权限并修改 `WindowsApps` 中文件的 ACL。
-- 不创建原始 ASAR 备份。
-- 会使已签名 AppX 的文件内容偏离微软发布版本。
-- 可能导致商店更新、包修复或启动完整性检查失败。
-- 卸载只能删除补丁注入并重新打包，不能恢复微软原始字节级哈希。
-- 需要恢复官方文件时，只能使用 Microsoft Store 的修复、重置或重装。
+- 需要管理员权限读取并复制当前 AppX 布局、关闭 Codex 进程和更新快捷方式。
+- 在 `%LOCALAPPDATA%\isCodexRunOut` 保存一份原始副本和一份补丁副本，磁盘占用约为应用安装体积的两倍。
+- 不修改 `WindowsApps` 中的 Store 源文件，标准商店入口仍启动未注入版本。
+- Store 更新后，本地副本不会自动同步，必须重新运行 `install.cmd`。
+- 安装会重定向匹配的 Codex 快捷方式，并保存原值供卸载恢复。
 
 这是当前实现的预期行为，不是可忽略的告警。
 
 ## 一键使用
 
-要求 Node.js 22.12 或更高版本，并先在仓库中安装依赖：
+要求 Node.js 22.12 或更高版本。随后双击：
 
-```powershell
-npm install
-```
+- `install.cmd`：缺少依赖时自动执行 `npm ci`，随后请求 UAC、关闭所有 Codex 实例、创建并 patch 本地应用副本、重定向快捷方式并启动补丁副本。
+- `uninstall.cmd`：请求 UAC、关闭 Codex、恢复快捷方式和环境变量、删除本地副本，再启动 Store 版本。
 
-随后双击：
-
-- `patch.cmd`：请求 UAC、关闭所有 Codex 实例、直接 patch 当前 AppX、恢复文件 ACL、从标准商店入口重启 Codex。
-- `uninstall.cmd`：请求 UAC、关闭 Codex、从当前 ASAR 移除注入、恢复 ACL、重启 Codex。
-
-两个脚本均可重复执行。`patch.cmd` 检测到相同构建时不会再次写入；`uninstall.cmd` 检测不到注入时不会写入。
+两个脚本均可重复执行。`install.cmd` 会复用已安装的依赖，并重新生成当前补丁副本；`uninstall.cmd` 会移除补丁副本并恢复快捷方式。
 
 也可从终端运行：
 
@@ -47,7 +40,7 @@ npm run status
 npm run uninstall:patch
 ```
 
-`npm run restore` 在无备份模式下会直接报错。卸载后的 ASAR 是功能上未注入的重打包版本，不等于 Store 原始哈希。
+`npm run restore` 会用原始副本恢复补丁副本中的 ASAR；`uninstall.cmd` 则删除两个本地副本和补丁状态。
 
 ## 标题栏
 

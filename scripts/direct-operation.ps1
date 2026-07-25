@@ -16,6 +16,37 @@ function Test-Administrator {
   )
 }
 
+function Assert-NodePrerequisites {
+  $nodeCommand = Get-Command node -ErrorAction Stop
+  $nodeVersionText = (& $nodeCommand.Source --version).Trim().TrimStart("v")
+  $nodeVersion = $null
+  if (-not [Version]::TryParse($nodeVersionText, [ref]$nodeVersion)) {
+    throw "Unable to parse the Node.js version: $nodeVersionText"
+  }
+  if ($nodeVersion -lt [Version]"22.12.0") {
+    throw "Node.js 22.12 or newer is required; found $nodeVersion"
+  }
+
+  $requiredPackages = @("@electron\asar\package.json")
+  if ($Operation -eq "patch") {
+    $requiredPackages += "esbuild\package.json"
+  }
+  $missingPackages = @(
+    $requiredPackages | Where-Object {
+      -not (
+        Test-Path `
+          -LiteralPath (Join-Path $repoRoot "node_modules\$_") `
+          -PathType Leaf
+      )
+    }
+  )
+  if ($missingPackages.Count -gt 0) {
+    throw "Node.js dependencies are missing. Run npm ci in $repoRoot and retry."
+  }
+}
+
+Assert-NodePrerequisites
+
 if (-not (Test-Administrator)) {
   $arguments = @(
     "-NoProfile",
@@ -38,8 +69,13 @@ if (-not (Test-Administrator)) {
   }
 }
 
-if (-not $Elevated) {
-  throw "Elevated marker is missing"
+# The caller may already be elevated (for example, an Administrator terminal or
+# a deployment tool running with a high-integrity token). In that case there is
+# no relaunch and therefore no -Elevated marker. The actual administrator token
+# is the source of truth; -Elevated is retained only for compatibility with
+# existing launchers and diagnostics.
+if (-not (Test-Administrator)) {
+  throw "Administrator privileges are required"
 }
 
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)

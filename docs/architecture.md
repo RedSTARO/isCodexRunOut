@@ -83,22 +83,23 @@ planType, rateLimitReachedType, spendControlReached, source
 
 缺少窗口时长或下次重置、当前时间不在周期内、当前使用量为零时不生成具体耗尽时间。数据超过约 2 个有效轮询周期为 stale，超过约 5 个周期为 expired；expired 停止具体 ETA。
 
-## 原位补丁与卸载
+## 本地副本补丁与卸载
 
-当前模式直接修改 Store AppX 的 `app\resources\app.asar`，不创建原版备份。
+当前模式只读 Store AppX，并在 `%LOCALAPPDATA%\isCodexRunOut` 维护两个完整布局：
+
+- `codex_backup`：与当前 Store 版本一致的原始副本。
+- `codex`：从原始副本生成、只修改 `app\resources\app.asar` 的活动副本。
 
 一键脚本流程：
 
-1. 请求管理员权限。
-2. 定位当前 `OpenAI.Codex` 包和 `app.asar`，校验路径仍位于该包目录。
-3. 关闭商店版和旧本地副本的所有 `ChatGPT.exe` 进程。
-4. 用 `takeown` 和 `icacls` 临时取得目标文件写权限。
+1. 检查 Node.js 版本和锁定依赖；`install.cmd` 在依赖缺失时先执行 `npm ci`。
+2. 请求管理员权限，定位当前 `OpenAI.Codex` 包。
+3. 将 Store 布局镜像到 `codex_backup`。
+4. 关闭所有 `ChatGPT.exe` 进程，再将原始副本镜像到 `codex`。
 5. 在 `%LOCALAPPDATA%\isCodexRunOut\.tmp` 构建候选 ASAR。
-6. 校验标题栏/数据锚点、37 个 unpacked 路径及内容哈希、补丁资源哈希和 HTML 标记。
-7. 不创建备份，直接以候选 ASAR 覆盖当前 AppX 文件，再核对写入哈希。
-8. 恢复继承 ACL 和 `TrustedInstaller` owner。
-9. 删除旧的可写副本与备份目录，从标准 AppsFolder 入口重启 Codex。
+6. 校验源、副本和活动 ASAR 的哈希，以及标题栏/数据锚点、unpacked 文件集合和注入资源。
+7. 只覆盖活动副本中的 ASAR，并记录补丁状态。
+8. 保存现有快捷方式和用户环境变量，随后重定向到活动副本。
+9. 启动 `%LOCALAPPDATA%\isCodexRunOut\codex\app\ChatGPT.exe`。
 
-卸载使用当前已 patch 的 ASAR作为输入，删除注入 HTML 和两个补丁资源，再执行同样的校验与原位覆盖。因此卸载只保证功能上移除补丁，不保证恢复 Store 原始 ASAR 的文件顺序或 SHA-256。
-
-覆盖发生在最后一步，但该模式没有自动回滚来源。覆盖中发生磁盘或进程级故障时，只能使用 Microsoft Store 修复、重置或重装。
+卸载恢复安装前保存的快捷方式和环境变量，删除 `codex`、`codex_backup` 及补丁状态，然后从标准 AppsFolder 入口启动 Store 版本。Store 源目录在安装和卸载过程中保持只读。

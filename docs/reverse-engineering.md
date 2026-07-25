@@ -100,6 +100,6 @@ type=fetch-response, requestId, responseType, status, headers, bodyJsonString
 
 `WindowsApps` 的实际 owner 为 `SYSTEM`，普通用户只有读取/执行权限，`TrustedInstaller` 和 `SYSTEM` 有 FullControl。本机中以 medium integrity 打开 `app.asar` 写句柄实际返回 Access denied。
 
-根据当前要求，补丁脚本通过 UAC 提升后临时取得单个 `app.asar` 的 ownership/write ACL，在本地临时目录完成重打包和校验，再直接覆盖当前 Store 文件并恢复 ACL/owner。没有外部悬浮窗口、完整应用副本或原版 ASAR 备份，标准商店入口直接运行被修改的应用。
+当前实现不再取得 Store 文件的写权限。补丁脚本通过 UAC 提升后，把当前 AppX 完整复制为 `%LOCALAPPDATA%\isCodexRunOut\codex_backup`，再复制为可写的 `codex` 活动目录；重打包和校验只修改活动副本中的 `app.asar`。最终运行的仍是 Codex Desktop 应用本体，不是外部悬浮窗口。
 
-该方式会使包内容偏离签名发布状态，可能干扰 AppX 完整性、修复和自动更新。卸载只能删除注入，字节级官方恢复依赖 Microsoft Store 修复或重装。
+安装会把匹配的 Codex 快捷方式重定向到活动副本，并保留原快捷方式和环境变量以便卸载恢复。Store 源目录保持不变；Store 更新后需要重新运行安装脚本，才能用新版本重建两个本地副本。

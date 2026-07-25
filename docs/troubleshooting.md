@@ -1,16 +1,17 @@
 # 故障排查
 
-## `patch.cmd` 没有修改应用
+## `install.cmd` 没有修改应用
 
 检查：
 
 - 是否批准了 UAC。
-- Node.js 和 `node_modules` 是否存在。
+- Node.js 版本是否不低于 22.12。
+- 自动执行的 `npm ci` 是否成功；失败时检查 npm 输出和网络连接。
 - Codex 是否成功退出。
 - 当前用户是否属于本机 Administrators。
 - `npm run inspect` 是否仍能找到当前 Store 包和结构锚点。
 
-脚本只对当前 `Get-AppxPackage OpenAI.Codex` 返回的包操作，并拒绝包目录外路径。
+脚本只读取当前 `Get-AppxPackage OpenAI.Codex` 返回的包，并且只在 `%LOCALAPPDATA%\isCodexRunOut` 下写入或删除受管副本。
 
 ## 状态仍显示 `installed: false`
 
@@ -20,28 +21,26 @@
 npm run status
 ```
 
-如果当前 ASAR 没有注入标记，说明管理员阶段未完成或覆盖失败。检查一键脚本窗口的退出码。不要手动复制不明 ASAR 到 `WindowsApps`。
+如果活动副本 ASAR 没有注入标记，说明管理员阶段未完成或副本覆盖失败。检查一键脚本窗口的退出码和 `%LOCALAPPDATA%\isCodexRunOut\direct-operation.log`。
 
-## Codex 无法从商店入口启动
+## 补丁快捷方式无法启动
 
-原位修改可能触发 AppX 完整性或包状态问题。由于没有备份，恢复方式是：
+先运行 `uninstall.cmd` 恢复安装前的快捷方式和环境变量，并删除本地副本。随后确认标准 Store 入口可以启动 Codex。
 
-1. Windows 设置 → 应用 → Codex → 高级选项 → 修复。
-2. 修复无效则重置。
-3. 仍无效则从 Microsoft Store 卸载并重新安装 Codex。
+如果 Store 入口也无法启动，再依次使用 Windows 设置中的“修复”“重置”，或从 Microsoft Store 重新安装。补丁流程不写入 Store 源文件。
 
-`uninstall.cmd` 只移除补丁注入，不能保证恢复微软发布哈希。
+`uninstall.cmd` 删除的是本地补丁副本；Store ASAR 应保持微软发布哈希。
 
 ## 商店更新失败或更新后补丁消失
 
-这是原位修改的预期风险。先让商店完成修复/更新，再运行：
+Store 更新不会同步已生成的本地副本。先让商店完成更新，再运行：
 
 ```powershell
 npm run inspect
 npm test
 ```
 
-只有结构探测通过后才能重新双击 `patch.cmd`。新版本缺少锚点时脚本会 fail-fast。
+只有结构探测通过后才能重新双击 `install.cmd`。新版本缺少锚点时脚本会 fail-fast。
 
 ## 标题栏没有组件
 
