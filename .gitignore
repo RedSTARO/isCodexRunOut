@@ -1,0 +1,16 @@
+node_modules/
+dist/
+coverage/
+*.log
+*.asar
+*.asar.unpacked/
+*.appx
+*.msix
+*.exe
+*.dll
+*.node
+backups/
+vendor/
+artifacts/
+.tmp/
+diagnostics/private/
