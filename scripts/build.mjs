@@ -22,5 +22,9 @@ await copyFile(
   path.join(root, "src", "injected", "style.css"),
   path.join(outputDirectory, "is-codex-run-out.css"),
 );
+await copyFile(
+  path.join(root, "src", "native", "rc-device-key.cjs"),
+  path.join(outputDirectory, "rc-device-key.cjs"),
+);
 
 console.log(`Built ${path.relative(root, outputDirectory)}`);

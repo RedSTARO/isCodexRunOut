@@ -83,22 +83,40 @@ planType, rateLimitReachedType, spendControlReached, source
 
 缺少窗口时长或下次重置、当前时间不在周期内、当前使用量为零时不生成具体耗尽时间。数据超过约 2 个有效轮询周期为 stale，超过约 5 个周期为 expired；expired 停止具体 ETA。
 
-## 原位补丁与卸载
+## 远程控制兼容层
 
-当前模式直接修改 Store AppX 的 `app\resources\app.asar`，不创建原版备份。
+当前 Windows 构建含有远程连接界面，但该界面的
+`showControlOtherDevices` 派生可见性受 gate `782640499` 关闭；主进程设备密钥
+客户端同时只允许 macOS native addon。patcher 在真实 bundle 中分别处理这两个
+锚点：
 
-一键脚本流程：
+1. 只将该 gate 对应的派生可见性改为常量 true，不修改 gate 本身或其他使用点。
+2. 将设备密钥客户端的 addon 加载位置替换为
+   `resources/native/rc-device-key.cjs`。
+3. 保持两个 bundle 字节长度不变，并要求锚点唯一；版本结构变化时 fail-fast。
 
-1. 请求管理员权限。
-2. 定位当前 `OpenAI.Codex` 包和 `app.asar`，校验路径仍位于该包目录。
-3. 关闭商店版和旧本地副本的所有 `ChatGPT.exe` 进程。
-4. 用 `takeown` 和 `icacls` 临时取得目标文件写权限。
-5. 在 `%LOCALAPPDATA%\isCodexRunOut\.tmp` 构建候选 ASAR。
-6. 校验标题栏/数据锚点、37 个 unpacked 路径及内容哈希、补丁资源哈希和 HTML 标记。
-7. 不创建备份，直接以候选 ASAR 覆盖当前 AppX 文件，再核对写入哈希。
-8. 恢复继承 ACL 和 `TrustedInstaller` owner。
-9. 删除旧的可写副本与备份目录，从标准 AppsFolder 入口重启 Codex。
+Windows helper 生成 P-256 密钥，公开部分使用 SPKI DER，签名算法为
+ECDSA P-256/SHA-256。PKCS#8 私钥经 Windows DPAPI CurrentUser 加密后写入
+`remote-control-device-keys.windows.json`，不会以 PEM 明文落盘。
 
-卸载使用当前已 patch 的 ASAR作为输入，删除注入 HTML 和两个补丁资源，再执行同样的校验与原位覆盖。因此卸载只保证功能上移除补丁，不保证恢复 Store 原始 ASAR 的文件顺序或 SHA-256。
+## 副本安装与卸载
 
-覆盖发生在最后一步，但该模式没有自动回滚来源。覆盖中发生磁盘或进程级故障时，只能使用 Microsoft Store 修复、重置或重装。
+一键安装流程：
+
+1. 请求管理员权限，定位当前 `OpenAI.Codex` Store 包。
+2. 将完整 Store 安装目录镜像到
+   `%LOCALAPPDATA%\isCodexRunOut\codex_backup`。
+3. 关闭所有 `ChatGPT.exe`，将 backup 镜像到活动目录
+   `%LOCALAPPDATA%\isCodexRunOut\codex`。
+4. 只在活动目录中构建候选 ASAR，校验标题栏、额度数据、远程控制锚点、
+   37 个 unpacked 路径及内容哈希。
+5. 将候选 ASAR 和设备密钥 helper 写入活动目录并再次核对 SHA-256。
+6. 保存并重定向桌面/用户开始菜单快捷方式及两个用户环境变量。
+7. 启动活动副本。
+
+Store 源目录、文件 ACL 和 AppX 注册均不修改。每次 patch 都从当前 Store 版本重建
+backup 和活动副本，因此补丁不会叠加到先前活动 ASAR。
+
+卸载时恢复安装前记录的快捷方式和环境变量，删除两个托管副本及状态文件，然后从
+AppsFolder 启动 Store 原版。已固定到开始菜单的 AppX 项不属于 `.lnk`，不能被脚本
+改写；用户需要取消固定并固定新的用户开始菜单快捷方式。

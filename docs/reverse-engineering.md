@@ -96,10 +96,26 @@ type=fetch-response, requestId, responseType, status, headers, bodyJsonString
 
 通过本机 app-server 实际调用确认当前账户可以返回多个额度桶。测试时主要窗口实际周期为 10080 分钟，即 7 天；另一个具名额度桶同样为 7 天。测试响应当时没有 5 小时窗口，所以实现不会假定或伪造 5 小时窗口。
 
-## 选定的修改方式
+## 远程控制锚点
+
+本机构建的远程连接设置位于
+`webview/assets/remote-connections-settings-D24FMFxV.js`。gate
+`782640499` 只出现一次，其绑定值随后经 `z=!m` 形成
+`showControlOtherDevices:z`。补丁只将该派生值改为 true，不改变 gate 读取或其他
+功能可见性。
+
+主进程 `.vite/build/main-DS6zBDC3.js` 含有唯一的
+`Remote control device keys are only available on macOS` 错误路径，并通过
+`remote-control-device-key.node` 加载 native addon。补丁以等长 stub 将这个加载点
+指向活动副本内的 Windows CommonJS helper。两个 bundle 的定位都要求锚点唯一。
+
+## 选定的安装方式
 
 `WindowsApps` 的实际 owner 为 `SYSTEM`，普通用户只有读取/执行权限，`TrustedInstaller` 和 `SYSTEM` 有 FullControl。本机中以 medium integrity 打开 `app.asar` 写句柄实际返回 Access denied。
 
-根据当前要求，补丁脚本通过 UAC 提升后临时取得单个 `app.asar` 的 ownership/write ACL，在本地临时目录完成重打包和校验，再直接覆盖当前 Store 文件并恢复 ACL/owner。没有外部悬浮窗口、完整应用副本或原版 ASAR 备份，标准商店入口直接运行被修改的应用。
+管理员取得 ownership/ACL 后仍不能可靠覆盖 package volume 文件；以 SYSTEM 身份
+重试也失败。因此直接修改 Store AppX 在本机不可用。
 
-该方式会使包内容偏离签名发布状态，可能干扰 AppX 完整性、修复和自动更新。卸载只能删除注入，字节级官方恢复依赖 Microsoft Store 修复或重装。
+当前方式读取 Store 目录并创建两个完整用户副本：`codex_backup` 保留当次官方内容，
+`codex` 作为活动补丁副本。快捷方式和两个用户环境变量指向活动副本，Store 包及
+注册保持不变。卸载恢复重定向并删除副本后，从原 AppX AUMID 启动官方版本。

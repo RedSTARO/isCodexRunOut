@@ -7,6 +7,7 @@ const files = [
   "src/injected/runtime.mjs",
   "src/injected/bridge-client.mjs",
   "src/injected/ui.mjs",
+  "src/native/rc-device-key.cjs",
   "src/core/config.mjs",
   "src/core/normalize.mjs",
   "src/core/eta.mjs",

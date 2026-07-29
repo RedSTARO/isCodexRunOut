@@ -1,6 +1,8 @@
 # isCodexRunOut
 
-这是针对当前 Windows Codex Desktop 的原位标题栏补丁。它直接重打包 Microsoft Store 安装目录中的 `app\resources\app.asar`，标准商店入口随后运行修改后的应用本体。
+这是针对当前 Windows Codex Desktop 的本地副本补丁。它保留 Microsoft Store
+安装目录不变，将完整官方目录复制到用户可写位置，再重打包副本中的
+`app\resources\app.asar`。
 
 当前本机已验证版本：
 
@@ -10,18 +12,18 @@
 - 原始 `app.asar` SHA-256：`44884f86d619a12c3c0af1b8c65945005bda4379775b03270674c666226ff4b7`
 - 技术栈：Owl/Chromium 150，Electron 兼容 ASAR WebView
 
-## 先明确风险
+## 安装模型
 
-该模式：
+当前使用两个完整目录：
 
-- 需要管理员权限并修改 `WindowsApps` 中文件的 ACL。
-- 不创建原始 ASAR 备份。
-- 会使已签名 AppX 的文件内容偏离微软发布版本。
-- 可能导致商店更新、包修复或启动完整性检查失败。
-- 卸载只能删除补丁注入并重新打包，不能恢复微软原始字节级哈希。
-- 需要恢复官方文件时，只能使用 Microsoft Store 的修复、重置或重装。
+- `%LOCALAPPDATA%\isCodexRunOut\codex_backup`：每次安装时从当前 Store
+  版本重新同步的完整原始副本。
+- `%LOCALAPPDATA%\isCodexRunOut\codex`：从 backup 复制后注入补丁的活动副本。
 
-这是当前实现的预期行为，不是可忽略的告警。
+桌面快捷方式、用户开始菜单快捷方式和
+`IS_CODEX_RUN_OUT_ROOT`/`IS_CODEX_RUN_OUT_APP` 用户环境变量指向活动副本。
+Store 包及其 ACL 不修改。Windows 11 已固定的 Store 图标是 AppX AUMID，不能改写
+目标；需要取消固定后固定 `ChatGPT (isCodexRunOut)`。
 
 ## 一键使用
 
@@ -31,12 +33,15 @@
 npm install
 ```
 
-随后双击：
+随后双击并批准 UAC：
 
-- `patch.cmd`：请求 UAC、关闭所有 Codex 实例、直接 patch 当前 AppX、恢复文件 ACL、从标准商店入口重启 Codex。
-- `uninstall.cmd`：请求 UAC、关闭 Codex、从当前 ASAR 移除注入、恢复 ACL、重启 Codex。
+- `patch.cmd`：同步 Store → backup，关闭 Codex，重建活动副本，注入补丁，
+  重定向快捷方式和环境变量，再启动活动副本。
+- `uninstall.cmd`：关闭活动副本，恢复原快捷方式和环境变量，删除两个托管副本，
+  再启动 Store 原版。
 
-两个脚本均可重复执行。`patch.cmd` 检测到相同构建时不会再次写入；`uninstall.cmd` 检测不到注入时不会写入。
+两个脚本均可重复执行。每次 patch 都以当前 Store 版本重建活动副本，避免在旧补丁上
+叠加修改。
 
 也可从终端运行：
 
@@ -47,7 +52,26 @@ npm run status
 npm run uninstall:patch
 ```
 
-`npm run restore` 在无备份模式下会直接报错。卸载后的 ASAR 是功能上未注入的重打包版本，不等于 Store 原始哈希。
+`npm run restore` 只恢复活动副本中的 ASAR 和远程控制 helper；完整卸载应使用
+`uninstall.cmd`。
+
+## Windows 远程控制
+
+补丁同时启用 Codex 设置中的“连接 → 控制其他设备”，并为 Windows 提供设备密钥
+实现：
+
+- P-256 ECDSA / SHA-256。
+- 私钥使用当前 Windows 用户的 DPAPI 加密后保存。
+- 密钥文件位于
+  `%CODEX_HOME%\remote-control-device-keys.windows.json`；未设置
+  `CODEX_HOME` 时位于
+  `%USERPROFILE%\.codex\remote-control-device-keys.windows.json`。
+- 设备密钥 helper 只安装到活动副本的
+  `app\resources\native\rc-device-key.cjs`。
+
+DPAPI 的保护边界是当前 Windows 用户。以同一用户运行的其他进程可以请求 Windows
+解密，因此该文件不应同步、共享或复制到其他设备。登录和设备注册仍由 Codex 官方
+界面与服务完成。
 
 ## 标题栏
 

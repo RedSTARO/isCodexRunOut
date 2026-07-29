@@ -7,10 +7,11 @@
 - 是否批准了 UAC。
 - Node.js 和 `node_modules` 是否存在。
 - Codex 是否成功退出。
-- 当前用户是否属于本机 Administrators。
 - `npm run inspect` 是否仍能找到当前 Store 包和结构锚点。
 
-脚本只对当前 `Get-AppxPackage OpenAI.Codex` 返回的包操作，并拒绝包目录外路径。
+检查 `%LOCALAPPDATA%\isCodexRunOut\direct-operation.log`。脚本只读取当前
+`Get-AppxPackage OpenAI.Codex` 返回的 Store 包，所有写入都限制在
+`%LOCALAPPDATA%\isCodexRunOut`。
 
 ## 状态仍显示 `installed: false`
 
@@ -20,28 +21,38 @@
 npm run status
 ```
 
-如果当前 ASAR 没有注入标记，说明管理员阶段未完成或覆盖失败。检查一键脚本窗口的退出码。不要手动复制不明 ASAR 到 `WindowsApps`。
+确认输出中的 `activeRoot` 指向
+`%LOCALAPPDATA%\isCodexRunOut\codex`，并检查：
 
-## Codex 无法从商店入口启动
+- `backupValid`
+- `activeAsarHash`
+- `injectionPresent`
+- `remoteControlEnabled`
+- `shortcutsRedirected`
+- `environmentRedirected`
 
-原位修改可能触发 AppX 完整性或包状态问题。由于没有备份，恢复方式是：
+任一项为 false 时，检查一键脚本退出码和日志。不要手动复制文件到
+`WindowsApps`。
 
-1. Windows 设置 → 应用 → Codex → 高级选项 → 修复。
-2. 修复无效则重置。
-3. 仍无效则从 Microsoft Store 卸载并重新安装 Codex。
+## 启动的仍是 Store 原版
 
-`uninstall.cmd` 只移除补丁注入，不能保证恢复微软发布哈希。
+Windows 11 已固定的 Codex 项是 AppX AUMID，脚本不能改写其目标。执行以下任一操作：
+
+1. 从桌面 `Codex` 快捷方式启动。
+2. 从开始菜单启动 `ChatGPT (isCodexRunOut)`。
+3. 取消固定原 Store 图标，再固定新的用户快捷方式。
 
 ## 商店更新失败或更新后补丁消失
 
-这是原位修改的预期风险。先让商店完成修复/更新，再运行：
+Store 包本身未修改。商店更新不会自动更新正在使用的活动副本；更新完成后运行：
 
 ```powershell
 npm run inspect
 npm test
 ```
 
-只有结构探测通过后才能重新双击 `patch.cmd`。新版本缺少锚点时脚本会 fail-fast。
+结构探测通过后重新双击 `patch.cmd`，它会从新 Store 版本重建两个副本。新版本缺少
+任一标题栏、额度或远程控制锚点时会 fail-fast。
 
 ## 标题栏没有组件
 
@@ -52,6 +63,26 @@ npm test
 - 窗口有足够安全空间；空间不足时组件会自动隐藏。
 
 如果组件在设置中被关闭，按 `Ctrl+Alt+Q` 打开配置。
+
+## “控制其他设备”没有出现
+
+运行 `npm run status`，确认：
+
+- `remoteControlEnabled` 为 true。
+- `deviceKeyHelperPath` 指向活动副本且文件存在。
+- 当前进程路径位于 `%LOCALAPPDATA%\isCodexRunOut\codex`，而不是
+  `C:\Program Files\WindowsApps`。
+
+设置入口在 Codex 的“设置 → 连接”。如果 status 正常但入口缺失，当前 Store 构建
+的 bundle 结构或服务端 gate 行为可能已经变化；重新执行 `npm run inspect`，不要
+手动扩大正则匹配范围。
+
+## 远程控制设备密钥失败
+
+密钥文件默认为
+`%USERPROFILE%\.codex\remote-control-device-keys.windows.json`。不要手工编辑、
+同步或复制该文件。若日志报告 DPAPI 解密失败，常见前提是文件来自另一个 Windows
+用户或设备；保留原文件供检查，再由用户决定是否删除并重新注册设备。
 
 ## 显示“接口不兼容”
 

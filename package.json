@@ -1,9 +1,9 @@
 {
   "name": "is-codex-run-out",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "A local, reversible Codex Desktop title-bar quota patch for Windows.",
+  "description": "A local Codex Desktop quota and remote-control patch for Windows.",
   "scripts": {
     "build": "node scripts/build.mjs",
     "check": "node scripts/check.mjs",

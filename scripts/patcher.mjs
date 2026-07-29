@@ -16,8 +16,14 @@ import {
   getRawHeader,
 } from "@electron/asar";
 
-export const INJECTION_START = "<!-- isCodexRunOut:start v0.1.0 -->";
+export const INJECTION_START = "<!-- isCodexRunOut:start v0.2.0 -->";
 export const INJECTION_END = "<!-- isCodexRunOut:end -->";
+export const REMOTE_CONTROL_GATE_ID = "782640499";
+export const REMOTE_CONTROL_HELPER_NAME = "rc-device-key.cjs";
+
+const REMOTE_CONTROL_REQUIRED_TOKEN = "showControlOtherDevices";
+const DEVICE_KEY_MACOS_ERROR =
+  "Remote control device keys are only available on macOS";
 
 const INJECTION = `${INJECTION_START}
 <link rel="stylesheet" href="./assets/is-codex-run-out.css">
@@ -101,6 +107,203 @@ export function stripInjection(source) {
   return source.replace(pattern, "");
 }
 
+function occurrences(source, token) {
+  return source.split(token).length - 1;
+}
+
+export function patchRemoteControlVisibility(input) {
+  const original = Buffer.isBuffer(input) ? input : Buffer.from(input);
+  const source = original.toString("latin1");
+  if (occurrences(source, REMOTE_CONTROL_GATE_ID) !== 1) {
+    throw new Error(
+      `远程控制 gate ${REMOTE_CONTROL_GATE_ID} 数量不是 1`,
+    );
+  }
+  const gatePattern = new RegExp(
+    "(?<gate>[A-Za-z_$][A-Za-z0-9_$]*)=" +
+      "[A-Za-z_$][A-Za-z0-9_$]*\\(`" +
+      REMOTE_CONTROL_GATE_ID +
+      "`\\)",
+    "gu",
+  );
+  const gateMatches = [...source.matchAll(gatePattern)];
+  if (gateMatches.length !== 1) {
+    throw new Error("无法唯一定位远程控制 gate 绑定");
+  }
+  const gateMatch = gateMatches[0];
+  const gateAlias = gateMatch.groups.gate;
+  const windowStart = gateMatch.index + gateMatch[0].length;
+  const requiredAt = source.indexOf(
+    REMOTE_CONTROL_REQUIRED_TOKEN,
+    windowStart,
+  );
+  if (requiredAt < 0 || requiredAt - windowStart > 12_000) {
+    throw new Error("远程控制 gate 未关联 showControlOtherDevices");
+  }
+  const windowEnd =
+    requiredAt + REMOTE_CONTROL_REQUIRED_TOKEN.length;
+  const window = source.slice(windowStart, windowEnd);
+  const already = [
+    ...window.matchAll(
+      /(?<visible>[A-Za-z_$][A-Za-z0-9_$]*)=!0\s*(?=,)/gu,
+    ),
+  ];
+  if (already.length === 1) {
+    return {
+      buffer: original,
+      metadata: {
+        status: "already-patched",
+        visibilityAlias: already[0].groups.visible,
+      },
+    };
+  }
+  const derivedPattern = new RegExp(
+    "(?<visible>[A-Za-z_$][A-Za-z0-9_$]*)=" +
+      `(?<expression>!${gateAlias})(?=,)`,
+    "gu",
+  );
+  const derived = [...window.matchAll(derivedPattern)];
+  if (derived.length !== 1) {
+    throw new Error(
+      `远程控制可见性表达式数量不是 1：${derived.length}`,
+    );
+  }
+  const match = derived[0];
+  const expression = match.groups.expression;
+  const expressionStart =
+    windowStart + match.index + match[0].indexOf(expression);
+  const replacement = `!0${" ".repeat(expression.length - 2)}`;
+  const patched =
+    source.slice(0, expressionStart) +
+    replacement +
+    source.slice(expressionStart + expression.length);
+  const buffer = Buffer.from(patched, "latin1");
+  if (buffer.length !== original.length) {
+    throw new Error("远程控制可见性补丁改变了 bundle 长度");
+  }
+  return {
+    buffer,
+    metadata: {
+      status: "patched",
+      gateAlias,
+      visibilityAlias: match.groups.visible,
+      offset: expressionStart,
+    },
+  };
+}
+
+export function patchWindowsDeviceKeyClient(input) {
+  const original = Buffer.isBuffer(input) ? input : Buffer.from(input);
+  const source = original.toString("latin1");
+  const errorCount = occurrences(source, DEVICE_KEY_MACOS_ERROR);
+  if (errorCount === 0) {
+    if (occurrences(source, REMOTE_CONTROL_HELPER_NAME) === 1) {
+      return {
+        buffer: original,
+        metadata: { status: "already-patched", shape: "class" },
+      };
+    }
+    throw new Error("未找到 Windows device-key 的 macOS 平台限制");
+  }
+  if (errorCount !== 1) {
+    throw new Error(`device-key macOS 限制数量不是 1：${errorCount}`);
+  }
+
+  const errorAt = source.indexOf(DEVICE_KEY_MACOS_ERROR);
+  const methodAt = source.lastIndexOf(
+    "getAddon(){",
+    errorAt,
+  );
+  if (methodAt < 0) {
+    throw new Error("无法定位 device-key getAddon 方法");
+  }
+  const methodWindow = source.slice(
+    methodAt,
+    Math.min(source.length, errorAt + 1_600),
+  );
+  const escapedError = DEVICE_KEY_MACOS_ERROR.replace(
+    /[.*+?^${}()|[\]\\]/gu,
+    "\\$&",
+  );
+  const methodPattern = new RegExp(
+    "getAddon\\(\\)\\{if\\(process\\.platform!==`darwin`\\)" +
+      `throw Error\\(\`${escapedError}\`\\);` +
+      "(?<body>.*?this\\.addon)\\}",
+    "gsu",
+  );
+  const methodMatches = [...methodWindow.matchAll(methodPattern)];
+  if (methodMatches.length !== 1) {
+    throw new Error(
+      `device-key getAddon 方法数量不是 1：${methodMatches.length}`,
+    );
+  }
+  const methodMatch = methodMatches[0];
+  const body = methodMatch.groups.body;
+  const pathMatches = [
+    ...body.matchAll(
+      /\(0,(?<path>[A-Za-z_$][A-Za-z0-9_$]*)\.join\)\(/gu,
+    ),
+  ];
+  if (pathMatches.length !== 1) {
+    throw new Error("无法唯一定位 device-key path.join 绑定");
+  }
+  const pathAlias = pathMatches[0].groups.path;
+
+  const prefixStart = Math.max(0, methodAt - 1_600);
+  const prefix = source.slice(prefixStart, methodAt);
+  const requireMatches = [
+    ...prefix.matchAll(
+      /var (?<require>[A-Za-z_$][A-Za-z0-9_$]*)=\(0,[A-Za-z_$][A-Za-z0-9_$]*\.createRequire\)\(__filename\)/gu,
+    ),
+  ].filter((match) => {
+    const after = prefix.slice(
+      match.index + match[0].length,
+      match.index + match[0].length + 500,
+    );
+    return after.includes("remote-control-device-key.node");
+  });
+  if (requireMatches.length !== 1) {
+    throw new Error("无法唯一定位 device-key createRequire 绑定");
+  }
+  const requireAlias = requireMatches[0].groups.require;
+  const stub =
+    "getAddon(){if(this.resourcesPath==null)throw Error(" +
+    "`Remote control device keys require resourcesPath`);" +
+    `return this.addon??=${requireAlias}((0,${pathAlias}.join)(` +
+    "this.resourcesPath,`native`," +
+    `\`${REMOTE_CONTROL_HELPER_NAME}\`)),this.addon}`;
+  if (stub.length > methodMatch[0].length) {
+    throw new Error(
+      `device-key stub 超出字节预算：${stub.length}/${methodMatch[0].length}`,
+    );
+  }
+  const methodStart = methodAt + methodMatch.index;
+  const replacement =
+    stub + " ".repeat(methodMatch[0].length - stub.length);
+  const patched =
+    source.slice(0, methodStart) +
+    replacement +
+    source.slice(methodStart + methodMatch[0].length);
+  const buffer = Buffer.from(patched, "latin1");
+  if (
+    buffer.length !== original.length ||
+    buffer.includes(Buffer.from(DEVICE_KEY_MACOS_ERROR)) ||
+    occurrences(buffer.toString("latin1"), REMOTE_CONTROL_HELPER_NAME) !== 1
+  ) {
+    throw new Error("device-key bundle 补丁校验失败");
+  }
+  return {
+    buffer,
+    metadata: {
+      status: "patched",
+      shape: "class",
+      offset: methodStart,
+      originalBytes: methodMatch[0].length,
+      stubBytes: stub.length,
+    },
+  };
+}
+
 function extractText(asarPath, archivePath) {
   return extractFile(
     asarPath,
@@ -156,11 +359,55 @@ export function inspectAsarCompatibility(
   if (missing.length > 0) {
     throw new Error(`Codex 结构不兼容，缺少锚点：${missing.join(", ")}`);
   }
+
+  const remoteUiBodies = files
+    .map((entry) => entry.path)
+    .filter((archivePath) =>
+      /^webview\/assets\/[^/]+\.js$/u.test(archivePath),
+    )
+    .map((archivePath) => ({
+      archivePath,
+      source: extractText(asarPath, archivePath),
+    }));
+  const remoteUiMatches = remoteUiBodies.filter(
+    ({ source }) =>
+      source.includes(REMOTE_CONTROL_GATE_ID) &&
+      source.includes(REMOTE_CONTROL_REQUIRED_TOKEN),
+  );
+  if (remoteUiMatches.length !== 1) {
+    throw new Error(
+      `远程控制 UI bundle 数量不是 1：${remoteUiMatches.length}`,
+    );
+  }
+  const mainBodies = files
+    .map((entry) => entry.path)
+    .filter((archivePath) =>
+      /^\.vite\/build\/[^/]+\.js$/u.test(archivePath),
+    )
+    .map((archivePath) => ({
+      archivePath,
+      source: extractText(asarPath, archivePath),
+    }));
+  const deviceKeyMatches = mainBodies.filter(
+    ({ source }) =>
+      source.includes(DEVICE_KEY_MACOS_ERROR) ||
+      source.includes(REMOTE_CONTROL_HELPER_NAME),
+  );
+  if (deviceKeyMatches.length !== 1) {
+    throw new Error(
+      `device-key 主进程 bundle 数量不是 1：${deviceKeyMatches.length}`,
+    );
+  }
   return {
     compatible: true,
     indexPath,
     candidates,
     anchors,
+    remoteControl: {
+      uiBundle: remoteUiMatches[0].archivePath,
+      mainBundle: deviceKeyMatches[0].archivePath,
+      helperName: REMOTE_CONTROL_HELPER_NAME,
+    },
     unpackedPaths: files
       .filter((entry) => entry.unpacked)
       .map((entry) => entry.path)
@@ -208,6 +455,23 @@ export async function buildPatchedAsar({
     copyFile(bundlePath, path.join(assetDirectory, "is-codex-run-out.js")),
     copyFile(stylePath, path.join(assetDirectory, "is-codex-run-out.css")),
   ]);
+
+  const remoteUiPath = path.join(
+    extractedDirectory,
+    ...compatibility.remoteControl.uiBundle.split("/"),
+  );
+  const remoteUiPatch = patchRemoteControlVisibility(
+    await readFile(remoteUiPath),
+  );
+  await writeFile(remoteUiPath, remoteUiPatch.buffer);
+  const deviceKeyBundlePath = path.join(
+    extractedDirectory,
+    ...compatibility.remoteControl.mainBundle.split("/"),
+  );
+  const deviceKeyPatch = patchWindowsDeviceKeyClient(
+    await readFile(deviceKeyBundlePath),
+  );
+  await writeFile(deviceKeyBundlePath, deviceKeyPatch.buffer);
 
   const unpackGlob = exactUnpackGlob(
     compatibility.unpackedPaths,
@@ -273,6 +537,10 @@ export async function buildPatchedAsar({
 
   return {
     compatibility,
+    remoteControl: {
+      visibility: remoteUiPatch.metadata,
+      deviceKey: deviceKeyPatch.metadata,
+    },
     patchedAsarHash: await sha256File(destinationAsar),
     outputUnpackedRoot,
   };
@@ -280,6 +548,7 @@ export async function buildPatchedAsar({
 
 export async function buildUnpatchedAsar({
   sourceAsar,
+  originalAsar,
   destinationAsar,
   workingDirectory,
 }) {
@@ -306,6 +575,26 @@ export async function buildUnpatchedAsar({
     rm(path.join(assetDirectory, "is-codex-run-out.css"), { force: true }),
   ]);
 
+  if (!originalAsar) {
+    throw new Error("完整卸载需要 originalAsar 以恢复远程控制 bundle");
+  }
+  const originalCompatibility = inspectAsarCompatibility(originalAsar, {
+    allowPatched: true,
+  });
+  for (const key of ["uiBundle", "mainBundle"]) {
+    const archivePath = compatibility.remoteControl[key];
+    if (archivePath !== originalCompatibility.remoteControl[key]) {
+      throw new Error(`原版远程控制 bundle 路径不匹配：${key}`);
+    }
+    await writeFile(
+      path.join(extractedDirectory, ...archivePath.split("/")),
+      extractFile(
+        originalAsar,
+        path.join(...archivePath.split("/")),
+      ),
+    );
+  }
+
   const unpackGlob = exactUnpackGlob(
     compatibility.unpackedPaths,
     extractedDirectory,
@@ -319,6 +608,28 @@ export async function buildUnpatchedAsar({
     JSON.stringify(compatibility.unpackedPaths)
   ) {
     throw new Error("卸载重打包后的 unpacked 文件集合与当前应用不一致");
+  }
+  for (const key of ["uiBundle", "mainBundle"]) {
+    const archivePath = compatibility.remoteControl[key];
+    const restoredHash = createHash("sha256")
+      .update(
+        extractFile(
+          destinationAsar,
+          path.join(...archivePath.split("/")),
+        ),
+      )
+      .digest("hex");
+    const originalHash = createHash("sha256")
+      .update(
+        extractFile(
+          originalAsar,
+          path.join(...archivePath.split("/")),
+        ),
+      )
+      .digest("hex");
+    if (restoredHash !== originalHash) {
+      throw new Error(`远程控制 bundle 恢复校验失败：${key}`);
+    }
   }
   await compareUnpackedFiles(
     `${sourceAsar}.unpacked`,

@@ -1,6 +1,6 @@
 # 测试与验收记录
 
-测试日期：2026-07-25。环境为 Windows、单显示器 1440×900；Codex renderer 实际参数包含 `device-scale-factor=2`。
+测试日期：2026-07-29。环境为 Windows、单显示器 1440×900；Codex renderer 实际参数包含 `device-scale-factor=2`。
 
 ## 自动化
 
@@ -12,7 +12,7 @@ npm run check
 npm test
 ```
 
-结果：19/19 通过。覆盖：
+结果：21/21 通过。覆盖：
 
 - 配置白名单、轮询上下限、关闭值、后台倍率和固定周期
 - wham 与 app-server 两种真实字段形状、多额度桶和非法数据 fail-fast
@@ -21,26 +21,45 @@ npm test
 - in-flight 去重、429、认证失败、不兼容停止和指数退避
 - HTML 单次注入
 - ASAR patch、重复 patch、unpatch 往返测试，包括 unpacked 集合与内容哈希
+- 远程控制 gate 的唯一定位、等长改写和重复 patch
+- Windows 设备密钥客户端的唯一定位、等长 helper 加载改写和重复 patch
+- P-256 密钥生成、DPAPI 持久化、签名验签、删除及无明文私钥校验
 - 恢复文件的校验、切换和临时文件清理
 
-## 原位 patch/unpatch
+## Store 写入与副本安装
 
-普通权限下对 Store `app.asar` 打开写句柄的实测结果为 Access denied；文件 owner 为 `SYSTEM`，`TrustedInstaller`/`SYSTEM` 有 FullControl，Users 只有 Read/Execute。因此一键脚本必须经过 UAC、`takeown` 和临时 ACL grant。
+普通权限、管理员 ownership/ACL 修改以及 SYSTEM 身份下直接覆盖 Store
+`app.asar` 均未成功。AppX package volume 仍拒绝或阻止该文件替换，因此最终安装路径
+不再修改 `WindowsApps`。
 
-直接运行 `node scripts/cli.mjs direct-install` 会在构建和写入前 fail-fast，并在失败后再次确认 Store ASAR 仍保持原始 SHA-256。
+当前一键脚本将完整 Store 目录同步到 backup，再从 backup 重建活动副本。已验证：
 
-在不写 `WindowsApps` 的情况下，以真实 Store ASAR 完成了临时目录 patch→unpatch 往返：
+- Store 源目录和原始 ASAR 哈希不变。
+- backup 与 Store 文件布局一致。
+- 活动副本从 backup 重建后只改写受管资源。
+- 桌面和用户开始菜单 `.lnk` 指向活动副本。
+- 卸载恢复原快捷方式和环境变量，并删除两个托管目录。
 
-- 输入原始哈希：`44884f86d619a12c3c0af1b8c65945005bda4379775b03270674c666226ff4b7`
-- 候选补丁哈希：`f308372e1beb459d3a9373abc307cb0b52b86834875191cee3b92c3b64c5109e`
-- unpatch 重打包哈希：`93db607e04b9eaa3d139d7b9ef5eb5b2678b66f68ac3492efb0639c46a2400aa`
-- unpacked 文件数：37，集合和内容哈希一致
-- 往返后 Store 源哈希未变化
-- unpatch 哈希与 Store 原哈希不同，证明无备份卸载不能声称字节级恢复
+## 真实 ASAR 远程控制 dry-run
 
-自提权脚本已通过 PowerShell parser 检查，但没有在本任务进程内执行管理员覆盖：脚本会关闭正在承载本任务的 Codex。实际原位覆盖需要用户双击 `patch.cmd` 并批准 UAC。
+以本机 Store 原始 ASAR 构建临时候选，结果：
 
-原位覆盖没有自动回滚或备份。候选在覆盖前完成全部结构和哈希检查，但覆盖本身若失败只能由 Store 修复/重装。
+- 已安装候选 ASAR SHA-256：
+  `afe05e74c5b8f840e3918960c71a29ab1c353decd84c466d5df264aaa6aa3037`
+- UI bundle：`webview/assets/remote-connections-settings-D24FMFxV.js`
+- gate alias：`m`；派生 visibility alias：`z`；改写偏移：`133401`
+- main bundle：`.vite/build/main-DS6zBDC3.js`
+- 设备密钥客户端形状：`class`；改写偏移：`1745753`
+- 原方法 284 字节，helper stub 199 字节，尾部填充后 bundle 总长度不变
+- 原始 macOS-only 错误消失，helper 路径出现一次
+- unpacked 文件数仍为 37，集合和内容哈希未变化
+
+设备密钥测试在临时 `CODEX_HOME` 中实际调用 Windows DPAPI，签名经公钥验签通过；
+存储 JSON 只含 DPAPI 密文，不含 PKCS#8/PEM 私钥。
+
+`patch.cmd` 连续运行两次均完成。第二次实际先由 `/MIR` 删除活动副本中的
+`rc-device-key.cjs` 和已 patch ASAR，再从 backup 重建并重新执行全部补丁；最终
+ASAR/helper 哈希与状态记录一致，`installed` 和 `remoteControlEnabled` 均为 true。
 
 ## 实际窗口与自适应
 
